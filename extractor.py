@@ -1,5 +1,5 @@
 import os
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 from flask import Flask, render_template, request, jsonify
 from spacy.matcher import Matcher
 import spacy
@@ -10,6 +10,7 @@ from io import BytesIO
 from PyPDF2 import PageObject, PdfReader
 import networkx as nx
 import urllib.parse
+from textblob import TextBlob
 
 app = Flask(__name__)
 
@@ -26,7 +27,7 @@ def home():
     title = request.form.get('title')
     print('Title:', title)
     authors_input = request.form.get('author')
-    authors = [author.strip() for author in authors_input.split(",")]  # Split authors by comma and remove leading/trailing whitespaces
+    authors = [author.strip() for author in authors_input.split(",")]
     print('Authors:', authors)
 
     custom_entities_input = request.form.get('customEntities')
@@ -43,7 +44,7 @@ def home():
         if i < len(authors):
             author = authors[i]
         else:
-            author = authors[-1]  # Use the last author if there are more URLs than authors
+            author = authors[-1]
 
         result = process_url(url, title, author, custom_entities, only_custom_entities)
         results.append(result)
@@ -59,15 +60,6 @@ def delete_rows():
 
     return jsonify(data)
 
-@app.route('/save_gexf', methods=['POST'])
-def save_gexf():
-    title = request.json.get('title')
-    data = request.json.get('data')
-    df = pd.DataFrame(data[1:], columns=data[0])
-    G = nx.from_pandas_edgelist(df, 'source', 'target')
-    nx.write_gexf(G, f'{title}.gexf')
-    return jsonify({"message": "Success"}), 200
-
 def process_url(url, title, author, custom_entities, only_custom_entities):
     print('Inside process_url', url)
 
@@ -80,15 +72,11 @@ def process_url(url, title, author, custom_entities, only_custom_entities):
     else:
         print('No custom entities provided.')
 
-    # Decode the URL
     url = urllib.parse.unquote(url)
-
-    # Check if URL schema is present
     parsed_url = urllib.parse.urlparse(url)
     if not bool(parsed_url.scheme):
         url = "http://" + url
 
-    # Check if the URL is valid
     try:
         result = urllib.parse.urlparse(url)
         is_valid = all([result.scheme, result.netloc, result.path])
@@ -123,11 +111,9 @@ def process_url(url, title, author, custom_entities, only_custom_entities):
     if custom_entities or only_custom_entities:
         if custom_entities:
             matches = matcher(doc)
-            entities += [(doc[start:end].text, "CUSTOM", get_entity_context(doc, start, end)) for match_id, start, end in matches]
-        else:
-            print('Skipping matching with custom entities because none were provided.')
+            entities += [(doc[start:end].text, "CUSTOM", get_entity_context(doc, start, end), get_entity_sentiment(get_entity_context(doc, start, end))) for match_id, start, end in matches]
     if not only_custom_entities:
-        entities += [(ent.text, ent.label_, get_entity_context(doc, ent.start_char, ent.end_char)) for ent in doc.ents]
+        entities += [(ent.text, ent.label_, get_entity_context(doc, ent.start, ent.end), get_entity_sentiment(get_entity_context(doc, ent.start, ent.end))) for ent in doc.ents]
 
     return {"url": url, "title": title, "author": author, "entities": entities}
 
@@ -138,14 +124,16 @@ def read_pdf(file):
         text += page.extract_text()
     return text
 
-def get_entity_context(doc, start_char, end_char):
-    sentence_spans = list(doc.sents)
-    entity_sentence = None
-    for span in sentence_spans:
-        if start_char >= span.start_char and end_char <= span.end_char:
-            entity_sentence = span.text
-            break
-    return entity_sentence if entity_sentence else ""
+def get_entity_context(doc, start, end):
+    sent_list = list(doc.sents)
+    for i in range(len(sent_list)):
+        if start >= sent_list[i].start and end <= sent_list[i].end:
+            return sent_list[i].text
+    return ""
+
+def get_entity_sentiment(context):
+    sentiment = TextBlob(context).sentiment.polarity
+    return sentiment
 
 if __name__ == '__main__':
     app.run(debug=True)
